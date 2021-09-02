@@ -1,14 +1,19 @@
 <?xml version="1.0"?>
 <ruleset name="MediaWiki">
-    <rule ref="./vendor/hydrawiki/hydrawiki-codesniffer/HydraWiki">
-		<exclude name="Generic.Files.LineLength" />
-		<exclude name="MediaWiki.Commenting.FunctionComment" />
-		<exclude name="MediaWiki.NamingConventions.LowerCamelFunctionsName" />
-		<exclude name="MediaWiki.WhiteSpace.SpaceBeforeSingleLineComment" />
+	<rule ref="./vendor/mediawiki/mediawiki-codesniffer/MediaWiki">
+		<exclude name="MediaWiki.Commenting.FunctionComment.MissingDocumentationPublic" />
+		<exclude name="MediaWiki.Commenting.FunctionComment.MissingDocumentationPrivate" />
+		<exclude name="MediaWiki.Commenting.FunctionAnnotations.AccessAnnotationInvalid" />
+		<exclude name="MediaWiki.Commenting.FunctionComment.MissingParamName" />
+		<exclude name="MediaWiki.Commenting.FunctionComment.MissingParamTag" />
+		<exclude name="MediaWiki.Commenting.FunctionComment.MissingReturn" />
+		<exclude name="Generic.Files.LineLength.TooLong" />
+		<exclude name="MediaWiki.NamingConventions.LowerCamelFunctionsName.FunctionName" />
 		<exclude name="PSR2.Methods.MethodDeclaration.Underscore" />
-	</rule>
-	<rule ref="Generic.NamingConventions.ConstructorName">
-		<severity>3</severity>
+		<exclude name="MediaWiki.ControlStructures.AssignmentInControlStructures.AssignmentInControlStructures" />
+		<exclude name="MediaWiki.WhiteSpace.SpaceBeforeSingleLineComment.NewLineComment" />
+		<exclude name="MediaWiki.Commenting.FunctionComment.WrongStyle" />
+		<exclude name="Generic.PHP.NoSilencedErrors.Discouraged" />
 	</rule>
     <file>.</file>
     <arg name="encoding" value="utf8"/>

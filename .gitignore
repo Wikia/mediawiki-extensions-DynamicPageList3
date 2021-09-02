@@ -4,5 +4,4 @@
 .DS_Store
 .svn
 /vendor
-composer.lock
 .idea
