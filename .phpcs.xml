@@ -14,6 +14,8 @@
 		<exclude name="MediaWiki.WhiteSpace.SpaceBeforeSingleLineComment.NewLineComment" />
 		<exclude name="MediaWiki.Commenting.FunctionComment.WrongStyle" />
 		<exclude name="Generic.PHP.NoSilencedErrors.Discouraged" />
+
+		<exclude name="MediaWiki.Commenting.MissingCovers.MissingCovers" />
 	</rule>
     <file>.</file>
     <arg name="encoding" value="utf8"/>

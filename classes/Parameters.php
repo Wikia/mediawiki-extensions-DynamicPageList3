@@ -10,6 +10,8 @@
  */
 namespace DPL;
 
+use MediaWiki\MediaWikiServices;
+
 class Parameters extends ParametersData {
 	/**
 	 * Set parameter options.
@@ -634,11 +636,12 @@ class Parameters extends ParametersData {
 	 * @return bool Success
 	 */
 	public function _namespace( $option ) {
-		global $wgContLang;
 		$extraParams = explode( '|', $option );
 		foreach ( $extraParams as $parameter ) {
 			$parameter = trim( $parameter );
-			$namespaceId = $wgContLang->getNsIndex( $parameter );
+			$namespaceId = MediaWikiServices::getInstance()
+				->getContentLanguage()
+				->getNsIndex( $parameter );
 			if ( $namespaceId === false || ( is_array( Config::getSetting( 'allowedNamespaces' ) ) && !in_array( $parameter, Config::getSetting( 'allowedNamespaces' ) ) ) ) {
 				// Let the user know this namespace is not allowed or does not exist.
 				return false;
@@ -848,10 +851,8 @@ class Parameters extends ParametersData {
 	 * @return bool Success
 	 */
 	public function _titleregexp( $option ) {
-		$data = $this->getParameter( 'title' );
-		if ( !is_array( $data['regexp'] ) ) {
-			$data['regexp'] = [];
-		}
+		$data = $this->getParameter( 'title' ) ?? [ 'regexp' => [] ];
+
 		$newMatches = explode( '|', str_replace( ' ', '\_', $option ) );
 
 		if ( !$this->isRegexValid( $newMatches, true ) ) {
@@ -872,10 +873,8 @@ class Parameters extends ParametersData {
 	 * @return bool Success
 	 */
 	public function _titlematch( $option ) {
-		$data = $this->getParameter( 'title' );
-		if ( !is_array( $data['like'] ) ) {
-			$data['like'] = [];
-		}
+		$data = $this->getParameter( 'title' ) ?? [ 'like' => [] ];
+
 		$newMatches = explode( '|', str_replace( ' ', '\_', $option ) );
 		$data['like'] = array_merge( $data['like'], $newMatches );
 		$this->setParameter( 'title', $data );

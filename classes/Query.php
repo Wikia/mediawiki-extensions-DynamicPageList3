@@ -10,6 +10,7 @@
  */
 namespace DPL;
 
+use MediaWiki\MediaWikiServices;
 use Wikimedia\Rdbms\IDatabase;
 
 class Query {
@@ -949,7 +950,7 @@ class Query {
 		if ( is_numeric( $option[0] ) ) {
 			$this->addWhere( intval( $option[0] ) . ' <= (SELECT count(*) FROM ' . $this->tableNames['categorylinks'] . ' WHERE ' . $this->tableNames['categorylinks'] . '.cl_from=page_id)' );
 		}
-		if ( is_numeric( $option[1] ) ) {
+		if ( isset( $option[1] ) && is_numeric( $option[1] ) ) {
 			$this->addWhere( intval( $option[1] ) . ' >= (SELECT count(*) FROM ' . $this->tableNames['categorylinks'] . ' WHERE ' . $this->tableNames['categorylinks'] . '.cl_from=page_id)' );
 		}
 	}
@@ -1643,14 +1644,13 @@ class Query {
 	 * @return void
 	 */
 	private function _ordermethod( $option ) {
-		global $wgContLang;
-
 		if ( $this->parameters->getParameter( 'goal' ) == 'categories' ) {
 			// No order methods for returning categories.
 			return true;
 		}
 
-		$namespaces = $wgContLang->getNamespaces();
+		$services = MediaWikiServices::getInstance();
+		$namespaces = $services->getContentLanguage()->getNamespaces();
 		// $aStrictNs = array_slice((array) Config::getSetting('allowedNamespaces'), 1, count(Config::getSetting('allowedNamespaces')), true);
 		$namespaces = array_slice( $namespaces, 3, count( $namespaces ), true );
 		$_namespaceIdToText = "CASE {$this->tableNames['page']}.page_namespace";
