@@ -14,6 +14,7 @@ use DPL\Article;
 use DPL\LST;
 use DPL\Parameters;
 use DPL\UpdateArticle;
+use MediaWiki\MediaWikiServices;
 use Parser;
 
 class Lister {
@@ -786,9 +787,7 @@ class Lister {
 	 * @return string Text with replacements performed.
 	 */
 	protected function replaceTagParameters( $tag, Article $article ) {
-		global $wgContLang;
-
-		$namespaces = $wgContLang->getNamespaces();
+		$namespaces = MediaWikiServices::getInstance()->getContentLanguage()->getNamespaces();
 
 		if ( strpos( $tag, '%' ) === false ) {
 			return $tag;

@@ -10,6 +10,7 @@
  */
 namespace DPL;
 
+use MediaWiki\MediaWikiServices;
 use Title;
 use User;
 
@@ -207,7 +208,9 @@ class Article {
 	 * @return Article \DPL\Article Object
 	 */
 	public static function newFromRow( $row, Parameters $parameters, \Title $title, $pageNamespace, $pageTitle ) {
-		global $wgLang, $wgContLang;
+		global $wgLang;
+
+		$contentLanguage = MediaWikiServices::getInstance()->getContentLanguage();
 
 		$article = new Article( $title, $pageNamespace );
 
@@ -234,9 +237,9 @@ class Article {
 
 		// get first char used for category-style output
 		if ( isset( $row['sortkey'] ) ) {
-			$article->mStartChar = $wgContLang->convert( $wgContLang->firstChar( $row['sortkey'] ) );
+			$article->mStartChar = $contentLanguage->convert( $contentLanguage->firstChar( $row['sortkey'] ) );
 		} else {
-			$article->mStartChar = $wgContLang->convert( $wgContLang->firstChar( $pageTitle ) );
+			$article->mStartChar = $contentLanguage->convert( $contentLanguage->firstChar( $pageTitle ) );
 		}
 
 		$article->mID = intval( $row['page_id'] );

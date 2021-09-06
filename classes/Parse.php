@@ -12,6 +12,7 @@ namespace DPL;
 
 use DPL\Heading\Heading;
 use DPL\Lister\Lister;
+use MediaWiki\MediaWikiServices;
 use Parser;
 use Wikimedia\Rdbms\IDatabase;
 
@@ -883,7 +884,7 @@ class Parse {
 	private function triggerEndResets( $output, &$reset, &$eliminate, $isParserTag ) {
 		global $wgHooks;
 
-		$localParser = new \Parser();
+		$localParser = MediaWikiServices::getInstance()->getParserFactory()->create();
 		$parserOutput = $localParser->parse( $output, $this->parser->mTitle, $this->parser->mOptions );
 
 		if ( !is_array( $reset ) ) {
