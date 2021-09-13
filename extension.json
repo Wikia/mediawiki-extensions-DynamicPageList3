@@ -56,7 +56,8 @@
 		"DPL\\Query": "classes/Query.php",
 		"DPL\\UpdateArticle": "classes/UpdateArticle.php",
 		"DPL\\Variables": "classes/Variables.php",
-		"DPL\\SeedTestDatabase": "classes/SeedTestDatabase.php",
+		"DPL\\RevisionJoinBuilder": "classes/RevisionJoinBuilder.php",
+		"DPL\\UserQueryBuilder": "classes/UserQueryBuilder.php",
 		"DynamicPageListHooks": "DynamicPageListHooks.php",
 		"DPL\\DPLIntegrationTestCase": "tests/phpunit/DPLIntegrationTestCase.php"
 	},

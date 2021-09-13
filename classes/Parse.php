@@ -10,6 +10,7 @@
  */
 namespace DPL;
 
+use ActorMigration;
 use DPL\Heading\Heading;
 use DPL\Lister\Lister;
 use MediaWiki\MediaWikiServices;
@@ -219,7 +220,9 @@ class Parse {
 		/* Query */
 		/*********/
 		try {
-			$this->query = new Query( $this->parameters );
+			$actorMigration = ActorMigration::newMigration();
+			$commentStore = MediaWikiServices::getInstance()->getCommentStore();
+			$this->query = new Query( $this->parameters, $actorMigration, $commentStore );
 			$result = $this->query->buildAndSelect( $calcRows );
 		} catch ( MWException $e ) {
 			$this->logger->addMessage( \DynamicPageListHooks::FATAL_SQLBUILDERROR, $e->getMessage() );
