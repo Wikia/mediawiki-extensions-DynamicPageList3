@@ -10,6 +10,8 @@
  */
 namespace DPL;
 
+use ActorMigration;
+use CommentStore;
 use MediaWiki\MediaWikiServices;
 use Wikimedia\Rdbms\IDatabase;
 
@@ -27,6 +29,16 @@ class Query {
 	 * @var IDatabase
 	 */
 	private $DB;
+
+	/**
+	 * @var ActorMigration
+	 */
+	private $actorMigration;
+
+	/** @var UserQueryBuilder */
+	private $userQueryBuilder;
+	/** @var RevisionJoinBuilder */
+	private $revisionJoinBuilder;
 
 	/**
 	 * Array of prefixed and escaped table names.
@@ -154,12 +166,23 @@ class Query {
 	 * @param \DPL\Parameters $parameters
 	 * @return	void
 	 */
-	public function __construct( Parameters $parameters ) {
+	public function __construct(
+		Parameters $parameters,
+		ActorMigration $actorMigration,
+		CommentStore $commentStore
+	) {
 		$this->parameters = $parameters;
 
 		$this->tableNames = self::getTableNames();
 
 		$this->DB = wfGetDB( DB_REPLICA, 'dpl' );
+		$this->actorMigration = $actorMigration;
+		$this->userQueryBuilder = new UserQueryBuilder( $this->DB, $this->actorMigration );
+		$this->revisionJoinBuilder = new RevisionJoinBuilder(
+			$this->DB,
+			$this->actorMigration,
+			$commentStore
+		);
 	}
 
 	/**
@@ -186,6 +209,24 @@ class Query {
 				throw new \MWException( __METHOD__ . ": SQL Build Error returned from {$function} for " . serialize( $option ) . "." );
 			}
 			$this->parametersProcessed[$parameter] = true;
+		}
+
+		$userQueryConds = $this->userQueryBuilder->getWhere();
+		if ( $userQueryConds ) {
+			$this->addWhere( $userQueryConds );
+		}
+
+		$revQueryInfo = $this->revisionJoinBuilder->getQueryInfo();
+		$this->addSelect( $revQueryInfo['fields'] );
+
+		foreach ( $revQueryInfo['tables'] as $alias => $table ) {
+			if ( !isset( $this->tables[$alias] ) ) {
+				$this->tables[$alias] = $table;
+			}
+		}
+
+		foreach ( $revQueryInfo['joins'] as $joinTarget => $joinConds ) {
+			$this->addJoin( $joinTarget, $joinConds );
 		}
 
 		if ( !$this->parameters->getParameter( 'openreferences' ) ) {
@@ -314,7 +355,7 @@ class Query {
 				$this->foundRows = intval( $total['rowcount'] );
 				$this->DB->freeResult( $calcRowsResult );
 			}
-		} catch ( Exception $e ) {
+		} catch ( \Exception $e ) {
 			$queryError = true;
 		}
 		if ( $queryError == true || $result === false ) {
@@ -392,6 +433,12 @@ class Query {
 			return true;
 		} else {
 			return false;
+		}
+	}
+
+	public function addTables( array $tablesByAlias ): void {
+		foreach ( $tablesByAlias as $alias => $table ) {
+			$this->addTable( $table, $alias );
 		}
 	}
 
@@ -516,6 +563,12 @@ class Query {
 		}
 		$this->join[$tableAlias] = $joinConditions;
 		return true;
+	}
+
+	public function addJoins( array $joins ) {
+		foreach ( $joins as $alias => $conds ) {
+			$this->addJoin( $alias, $conds );
+		}
 	}
 
 	/**
@@ -682,14 +735,9 @@ class Query {
 	private function _addauthor( $option ) {
 		// Addauthor can not be used with addlasteditor.
 		if ( !isset( $this->parametersProcessed['addlasteditor'] ) || !$this->parametersProcessed['addlasteditor'] ) {
-			$this->addTable( 'revision', 'rev' );
-			$this->addWhere(
-				[
-					$this->tableNames['page'] . '.page_id = rev.rev_page',
-					'rev.rev_timestamp = (SELECT MIN(rev_aux_min.rev_timestamp) FROM ' . $this->tableNames['revision'] . ' AS rev_aux_min WHERE rev_aux_min.rev_page = rev.rev_page)'
-				]
+			$this->revisionJoinBuilder->addFieldsFromFirst(
+				[ 'rev_user_text' => 'rev_user_text' ]
 			);
-			$this->_adduser( null, 'rev' );
 		}
 	}
 
@@ -725,27 +773,16 @@ class Query {
 	 * @return	void
 	 */
 	private function _addcontribution( $option ) {
-		$this->addTable( 'recentchanges', 'rc' );
+		$actorQuery = $this->actorMigration->getJoin( 'rc_user' );
 
-		$field = 'rc.rc_user_text';
-		// This is the wrong check since the ActorMigration may be in progress
-		// https://www.mediawiki.org/wiki/Actor_migration
-		if ( class_exists( 'ActorMigration' ) ) {
-			$field = 'rc.rc_actor';
-		}
+		$this->addTables( [ 'rc' => 'recentchanges' ] + $actorQuery['tables'] );
+		$this->addSelect( [
+			'contribution' => 'SUM(ABS(rc_new_len - rc_old_len))',
+			'contributor' => $actorQuery['fields']['rc_user_text']
+		] );
 
-		$this->addSelect(
-			[
-				'contribution'	=> 'SUM(ABS(rc.rc_new_len - rc.rc_old_len))',
-				'contributor'	=> $field
-			]
-		);
-		$this->addWhere(
-			[
-				$this->tableNames['page'] . '.page_id = rc.rc_cur_id'
-			]
-		);
-		$this->addGroupBy( 'rc.rc_cur_id' );
+		$this->addGroupBy( 'rc_cur_id, ' . $actorQuery['fields']['rc_actor'] );
+		$this->addJoins( [ 'rc' => [ 'JOIN', 'page_id = rc_cur_id' ] ] + $actorQuery['joins'] );
 	}
 
 	/**
@@ -791,14 +828,7 @@ class Query {
 	private function _addlasteditor( $option ) {
 		// Addlasteditor can not be used with addauthor.
 		if ( !isset( $this->parametersProcessed['addauthor'] ) || !$this->parametersProcessed['addauthor'] ) {
-			$this->addTable( 'revision', 'rev' );
-			$this->addWhere(
-				[
-					$this->tableNames['page'] . '.page_id = rev.rev_page',
-					'rev.rev_timestamp = (SELECT MAX(rev_aux_max.rev_timestamp) FROM ' . $this->tableNames['revision'] . ' AS rev_aux_max WHERE rev_aux_max.rev_page = rev.rev_page)'
-				]
-			);
-			$this->_adduser( null, 'rev' );
+			$this->revisionJoinBuilder->addFieldsFromLast( [ 'rev_user_text' => 'rev_user_text' ] );
 		}
 	}
 
@@ -855,25 +885,6 @@ class Query {
 		$this->addSelect(
 			[
 				"page_touched"	=> "{$this->tableNames['page']}.page_touched"
-			]
-		);
-	}
-
-	/**
-	 * Set SQL for 'adduser' parameter.
-	 *
-	 * @private
-	 * @param	mixed	Parameter Option
-	 * @param	string	[Optional] Table Alias
-	 * @return	void
-	 */
-	private function _adduser( $option, $tableAlias = '' ) {
-		$tableAlias = ( !empty( $tableAlias ) ? $tableAlias . '.' : '' );
-		$this->addSelect(
-			[
-				$tableAlias . 'rev_user',
-				$tableAlias . 'rev_user_text',
-				$tableAlias . 'rev_comment'
 			]
 		);
 	}
@@ -1050,15 +1061,7 @@ class Query {
 	 * @return	void
 	 */
 	private function _createdby( $option ) {
-		$this->addTable( 'revision', 'creation_rev' );
-		$this->_adduser( null, 'creation_rev' );
-		$this->addWhere(
-			[
-				$this->DB->addQuotes( $option ) . ' = creation_rev.rev_user_text',
-				'creation_rev.rev_page = page_id',
-				'creation_rev.rev_parent_id = 0'
-			]
-		);
+		$this->userQueryBuilder->addCreatedByConstraint( $option );
 	}
 
 	/**
@@ -1205,7 +1208,7 @@ class Query {
 	 * @return	void
 	 */
 	private function _lastmodifiedby( $option ) {
-	   $this->addWhere( $this->DB->addQuotes( $option ) . ' = (SELECT rev_user_text FROM ' . $this->tableNames['revision'] . ' WHERE ' . $this->tableNames['revision'] . '.rev_page=page_id ORDER BY ' . $this->tableNames['revision'] . '.rev_timestamp DESC LIMIT 1)' );
+		$this->userQueryBuilder->addLastModifiedByConstraint( $option );
 	}
 
 	/**
@@ -1484,8 +1487,7 @@ class Query {
 	 * @return	void
 	 */
 	private function _modifiedby( $option ) {
-		$this->addTable( 'revision', 'change_rev' );
-		$this->addWhere( $this->DB->addQuotes( $option ) . ' = change_rev.rev_user_text AND change_rev.rev_page = page_id' );
+		$this->userQueryBuilder->addModifiedByConstraint( $option );
 	}
 
 	/**
@@ -1521,8 +1523,7 @@ class Query {
 	 * @return	void
 	 */
 	private function _notcreatedby( $option ) {
-		$this->addTable( 'revision', 'no_creation_rev' );
-		$this->addWhere( $this->DB->addQuotes( $option ) . ' != no_creation_rev.rev_user_text AND no_creation_rev.rev_page = page_id AND no_creation_rev.rev_parent_id = 0' );
+		$this->userQueryBuilder->addNotCreatedByConstraint( $option );
 	}
 
 	/**
@@ -1533,7 +1534,7 @@ class Query {
 	 * @return	void
 	 */
 	private function _notlastmodifiedby( $option ) {
-		$this->addWhere( $this->DB->addQuotes( $option ) . ' != (SELECT rev_user_text FROM ' . $this->tableNames['revision'] . ' WHERE ' . $this->tableNames['revision'] . '.rev_page=page_id ORDER BY ' . $this->tableNames['revision'] . '.rev_timestamp DESC LIMIT 1)' );
+		$this->userQueryBuilder->addNotLastModifiedByConstraint( $option );
 	}
 
 	/**
@@ -1544,7 +1545,7 @@ class Query {
 	 * @return	void
 	 */
 	private function _notmodifiedby( $option ) {
-		$this->addWhere( 'NOT EXISTS (SELECT 1 FROM ' . $this->tableNames['revision'] . ' WHERE ' . $this->tableNames['revision'] . '.rev_page=page_id AND ' . $this->tableNames['revision'] . '.rev_user_text = ' . $this->DB->addQuotes( $option ) . ' LIMIT 1)' );
+		$this->userQueryBuilder->addNotModifiedByConstraint( $option );
 	}
 
 	/**
@@ -1660,6 +1661,10 @@ class Query {
 		$_namespaceIdToText .= ' END';
 
 		$option = (array)$option;
+
+		$willOrderByLastEdit = in_array( 'lastedit', $option );
+		$willOrderByFirstEdit = in_array( 'firstedit', $option );
+
 		foreach ( $option as $orderMethod ) {
 			switch ( $orderMethod ) {
 				case 'category':
@@ -1719,22 +1724,10 @@ class Query {
 					}
 					break;
 				case 'firstedit':
-					$this->addOrderBy( 'rev.rev_timestamp' );
-					$this->addTable( 'revision', 'rev' );
-					$this->addSelect(
-						[
-							'rev.rev_timestamp'
-						]
-					);
-					if ( !$this->revisionAuxWhereAdded ) {
-						$this->addWhere(
-							[
-								"{$this->tableNames['page']}.page_id = rev.rev_page",
-								"rev.rev_timestamp = (SELECT MIN(rev_aux.rev_timestamp) FROM {$this->tableNames['revision']} AS rev_aux WHERE rev_aux.rev_page=rev.rev_page)"
-							]
-						);
-					}
-					$this->revisionAuxWhereAdded = true;
+					$this->revisionJoinBuilder->addFieldsFromFirst( [
+						'first_rev_timestamp' => 'rev_timestamp'
+					] );
+					$this->addOrderBy( 'first_rev_timestamp' );
 					break;
 				case 'lastedit':
 					if ( \DynamicPageListHooks::isLikeIntersection() ) {
@@ -1745,18 +1738,10 @@ class Query {
 							]
 						);
 					} else {
-						$this->addOrderBy( 'rev.rev_timestamp' );
-						$this->addTable( 'revision', 'rev' );
-						$this->addSelect( [ 'rev.rev_timestamp' ] );
-						if ( !$this->revisionAuxWhereAdded ) {
-							$this->addWhere(
-								[
-									"{$this->tableNames['page']}.page_id = rev.rev_page",
-									"rev.rev_timestamp = (SELECT MAX(rev_aux.rev_timestamp) FROM {$this->tableNames['revision']} AS rev_aux WHERE rev_aux.rev_page = rev.rev_page)"
-								]
-							);
-						}
-						$this->revisionAuxWhereAdded = true;
+						$this->revisionJoinBuilder->addFieldsFromLast( [
+							'latest_rev_timestamp' => 'rev_timestamp'
+						] );
+						$this->addOrderBy( 'latest_rev_timestamp' );
 					}
 					break;
 				case 'pagesel':
@@ -1839,9 +1824,23 @@ class Query {
 					}
 					break;
 				case 'user':
-					$this->addOrderBy( 'rev.rev_user_text' );
-					$this->addTable( 'revision', 'rev' );
-					$this->_adduser( null, 'rev' );
+					$actorQuery = $this->actorMigration->getJoin( 'rev_user' );
+					$sortField = $actorQuery['fields']['rev_actor'] !== 'NULL' ? 'rev_actor' : 'rev_user_text';
+					if ( $willOrderByFirstEdit ) {
+						$this->revisionJoinBuilder->addFieldsFromFirst( [
+							'rev_user_text' => 'rev_user_text',
+							'first_rev_actor' => $sortField
+						] );
+						$this->addOrderBy( 'first_rev_actor' );
+					}
+
+					if ( $willOrderByLastEdit ) {
+						$this->revisionJoinBuilder->addFieldsFromLast( [
+							'rev_user_text' => 'rev_user_text',
+							'last_rev_actor' => $sortField
+						] );
+						$this->addOrderBy( 'last_rev_actor' );
+					}
 					break;
 				case 'none':
 					break;

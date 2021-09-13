@@ -121,10 +121,10 @@ abstract class DPLIntegrationTestCase extends MediaWikiTestCase {
 	 * @param array $params - DPL invocation parameters
 	 * @return string[]
 	 */
-	protected function getDPLQueryResults( array $params ): array {
+	protected function getDPLQueryResults( array $params, string $format = '%PAGE%' ): array {
 		$params += [
 			// Use a custom format for executing the query to allow easily extracting results
-			'format' => '<div id="dpl-test-query">,%PAGE%,|,</div>'
+			'format' => "<div id=\"dpl-test-query\">,$format,|,</div>"
 		];
 
 		$html = $this->runDPLQuery( $params );
