@@ -44,4 +44,6 @@ php maintenance/install.php \
 	echo '$wgShowDBErrorBacktrace = true;'
 	echo '$wgDevelopmentWarnings = true;'
 	echo 'wfLoadExtension( "DynamicPageList3" );'
+	# Test using the revision_actor_temp table on MW 1.37
+	echo 'if ( version_compare( MW_VERSION, "1.38", "<" ) ) { $wgActorTableSchemaMigrationStage = SCHEMA_COMPAT_TEMP; }'
 } >> LocalSettings.php

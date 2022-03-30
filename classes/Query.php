@@ -10,8 +10,14 @@
  */
 namespace DPL;
 
+use ActorMigration;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\User\ActorNormalization;
+use MediaWiki\User\UserIdentityLookup;
+use MWException;
+use RecentChange;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IResultWrapper;
 
 class Query {
 	/**
@@ -20,6 +26,26 @@ class Query {
 	 * @var Parameters
 	 */
 	private $parameters;
+
+	/**
+	 * @var ActorMigration
+	 */
+	private $actorMigration;
+
+	/**
+	 * @var UserIdentityLookup
+	 */
+	private $userIdentityLookup;
+
+	/**
+	 * @var ActorNormalization
+	 */
+	private $actorNormalization;
+
+	/**
+	 * @var int
+	 */
+	private $actorMigrationStage;
 
 	/**
 	 * Mediawiki DB Object
@@ -147,27 +173,29 @@ class Query {
 	 */
 	private $revisionAuxWhereAdded = false;
 
-	/**
-	 * Main Constructor
-	 *
-	 * @access	public
-	 * @param \DPL\Parameters $parameters
-	 * @return	void
-	 */
-	public function __construct( Parameters $parameters ) {
+	public function __construct(
+		Parameters $parameters,
+		ActorMigration $actorMigration,
+		UserIdentityLookup $userIdentityLookup,
+		ActorNormalization $actorNormalization,
+		int $actorMigrationStage
+	) {
 		$this->parameters = $parameters;
 
 		$this->tableNames = self::getTableNames();
 
 		$this->DB = wfGetDB( DB_REPLICA, 'dpl' );
+		$this->actorMigration = $actorMigration;
+		$this->userIdentityLookup = $userIdentityLookup;
+		$this->actorNormalization = $actorNormalization;
+		$this->actorMigrationStage = $actorMigrationStage;
 	}
 
 	/**
 	 * Start a query build.
 	 *
-	 * @access	public
 	 * @param	boolean	Calculate Found Rows
-	 * @return mixed Mediawiki Result Object or False
+	 * @return IResultWrapper|bool
 	 */
 	public function buildAndSelect( $calcRows = false ) {
 		global $wgNonincludableNamespaces;
@@ -567,7 +595,7 @@ class Query {
 	 *
 	 * @access	public
 	 * @param	string	Collation
-	 * @return	void
+	 * @return void
 	 */
 	public function setCollation( $collation ) {
 		$this->collation = $collation;
@@ -677,15 +705,15 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addauthor( $option ) {
 		// Addauthor can not be used with addlasteditor.
 		if ( !isset( $this->parametersProcessed['addlasteditor'] ) || !$this->parametersProcessed['addlasteditor'] ) {
 			$this->addTable( 'revision', 'rev' );
+			$this->addJoin( 'rev', [ 'JOIN', $this->tableNames['page'] . '.page_id = rev.rev_page' ] );
 			$this->addWhere(
 				[
-					$this->tableNames['page'] . '.page_id = rev.rev_page',
 					'rev.rev_timestamp = (SELECT MIN(rev_aux_min.rev_timestamp) FROM ' . $this->tableNames['revision'] . ' AS rev_aux_min WHERE rev_aux_min.rev_page = rev.rev_page)'
 				]
 			);
@@ -698,7 +726,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addcategories( $option ) {
 		$this->addTable( 'categorylinks', 'cl_gc' );
@@ -722,22 +750,23 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addcontribution( $option ) {
 		$this->addTable( 'recentchanges', 'rc' );
+		$this->addTable( 'actor', 'recentchanges_actor' );
 
-		$field = 'rc.rc_user_text';
-		// This is the wrong check since the ActorMigration may be in progress
-		// https://www.mediawiki.org/wiki/Actor_migration
-		if ( class_exists( 'ActorMigration' ) ) {
-			$field = 'rc.rc_actor';
+		$rcQuery = RecentChange::getQueryInfo();
+
+		$this->addJoin( 'rc', [ 'JOIN', 'page_id = rc_cur_id' ] );
+		foreach ( $rcQuery['joins'] as $alias => $join ) {
+			$this->addJoin( $alias, $join );
 		}
 
 		$this->addSelect(
 			[
 				'contribution'	=> 'SUM(ABS(rc.rc_new_len - rc.rc_old_len))',
-				'contributor'	=> $field
+				'contributor'	=> 'rc_user_text'
 			]
 		);
 		$this->addWhere(
@@ -745,7 +774,7 @@ class Query {
 				$this->tableNames['page'] . '.page_id = rc.rc_cur_id'
 			]
 		);
-		$this->addGroupBy( 'rc.rc_cur_id' );
+		$this->addGroupBy( 'rc.rc_cur_id, rc.rc_actor' );
 	}
 
 	/**
@@ -753,7 +782,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addeditdate( $option ) {
 		$this->addTable( 'revision', 'rev' );
@@ -770,7 +799,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addfirstcategorydate( $option ) {
 		// @TODO: This should be programmatically determining which categorylink table to use instead of assuming the first one.
@@ -786,15 +815,15 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addlasteditor( $option ) {
 		// Addlasteditor can not be used with addauthor.
 		if ( !isset( $this->parametersProcessed['addauthor'] ) || !$this->parametersProcessed['addauthor'] ) {
 			$this->addTable( 'revision', 'rev' );
+			$this->addJoin( 'rev', [ 'JOIN', $this->tableNames['page'] . '.page_id = rev.rev_page' ] );
 			$this->addWhere(
 				[
-					$this->tableNames['page'] . '.page_id = rev.rev_page',
 					'rev.rev_timestamp = (SELECT MAX(rev_aux_max.rev_timestamp) FROM ' . $this->tableNames['revision'] . ' AS rev_aux_max WHERE rev_aux_max.rev_page = rev.rev_page)'
 				]
 			);
@@ -807,7 +836,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addpagecounter( $option ) {
 		if ( class_exists( "\\HitCounters\\Hooks" ) ) {
@@ -834,7 +863,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addpagesize( $option ) {
 		$this->addSelect(
@@ -849,7 +878,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _addpagetoucheddate( $option ) {
 		$this->addSelect(
@@ -865,17 +894,22 @@ class Query {
 	 * @private
 	 * @param	mixed	Parameter Option
 	 * @param	string	[Optional] Table Alias
-	 * @return	void
+	 * @return void
 	 */
 	private function _adduser( $option, $tableAlias = '' ) {
-		$tableAlias = ( !empty( $tableAlias ) ? $tableAlias . '.' : '' );
-		$this->addSelect(
-			[
-				$tableAlias . 'rev_user',
-				$tableAlias . 'rev_user_text',
-				$tableAlias . 'rev_comment'
-			]
-		);
+		if ( !isset( $this->select['rev_user_text' ] ) ) {
+			$actorField = $this->addRevisionActorTable( $tableAlias );
+			$actorTableAlias = $tableAlias !== '' ? $tableAlias . '_actor' : 'actor';
+
+			$this->addTable( 'actor', $actorTableAlias );
+			$this->addJoin( $actorTableAlias, [ 'JOIN', "$actorField = $actorTableAlias.actor_id" ] );
+
+			$this->addRevisionCommentTable( $tableAlias );
+			$this->addSelect( [
+				'rev_user' => "$actorTableAlias.actor_user",
+				'rev_user_text' => "$actorTableAlias.actor_name",
+			] );
+		}
 	}
 
 	/**
@@ -883,7 +917,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _allrevisionsbefore( $option ) {
 		$this->addTable( 'revision', 'rev' );
@@ -908,7 +942,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _allrevisionssince( $option ) {
 		$this->addTable( 'revision', 'rev' );
@@ -933,7 +967,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _articlecategory( $option ) {
 		$this->addWhere( "{$this->tableNames['page']}.page_title IN (SELECT p2.page_title FROM {$this->tableNames['page']} p2 INNER JOIN {$this->tableNames['categorylinks']} clstc ON (clstc.cl_from = p2.page_id AND clstc.cl_to = " . $this->DB->addQuotes( $option ) . ") WHERE p2.page_namespace = 0)" );
@@ -944,7 +978,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _categoriesminmax( $option ) {
 		if ( is_numeric( $option[0] ) ) {
@@ -960,7 +994,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _category( $option ) {
 		$i = 0;
@@ -1015,7 +1049,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _notcategory( $option ) {
 		$i = 0;
@@ -1047,18 +1081,29 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _createdby( $option ) {
 		$this->addTable( 'revision', 'creation_rev' );
-		$this->_adduser( null, 'creation_rev' );
-		$this->addWhere(
-			[
-				$this->DB->addQuotes( $option ) . ' = creation_rev.rev_user_text',
-				'creation_rev.rev_page = page_id',
+		$this->addJoin( 'creation_rev', [ 'JOIN', 'creation_rev.rev_page = page_id' ] );
+
+		$user = $this->userIdentityLookup->getUserIdentityByName( $option );
+		$actorField = $this->addRevisionActorTable( 'creation_rev' );
+
+		$this->addSelect( [
+			'creation_rev.rev_user' => $this->DB->addQuotes( $user ? $user->getId() : 0 ),
+			'creation_rev.rev_user_text' => $this->DB->addQuotes( $user ? $user->getName() : '' ),
+		] );
+
+		if ( $user ) {
+			$this->addWhere( [
+				$actorField => $this->actorNormalization->findActorId( $user, $this->DB ),
 				'creation_rev.rev_parent_id = 0'
-			]
-		);
+			] );
+		} else {
+			// unresolvable actor
+			$this->addWhere( '1=0' );
+		}
 	}
 
 	/**
@@ -1066,7 +1111,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _distinct( $option ) {
 		if ( $option == 'strict' || $option === true ) {
@@ -1081,7 +1126,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _firstrevisionsince( $option ) {
 		$this->addTable( 'revision', 'rev' );
@@ -1111,7 +1156,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _goal( $option ) {
 		if ( $option == 'categories' ) {
@@ -1125,7 +1170,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _hiddencategories( $option ) {
 		// @TODO: Unfinished functionality!  Never implemented by original author.
@@ -1136,7 +1181,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _imagecontainer( $option ) {
 		$this->addTable( 'imagelinks', 'ic' );
@@ -1170,7 +1215,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _imageused( $option ) {
 		if ( $this->parameters->getParameter( 'distinct' ) == 'strict' ) {
@@ -1202,10 +1247,29 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _lastmodifiedby( $option ) {
-	   $this->addWhere( $this->DB->addQuotes( $option ) . ' = (SELECT rev_user_text FROM ' . $this->tableNames['revision'] . ' WHERE ' . $this->tableNames['revision'] . '.rev_page=page_id ORDER BY ' . $this->tableNames['revision'] . '.rev_timestamp DESC LIMIT 1)' );
+		$user = $this->userIdentityLookup->getUserIdentityByName( $option );
+		$actorWhere = $this->actorMigration->getWhere( $this->DB, 'rev_user', $user );
+		// Use the denormalized revactor_timestamp field for sorting
+		// to leverage the index on revactor_actor,revactor_timestamp if applicable
+		$tsField = isset( $actorWhere['tables']['temp_rev_user'] ) ? 'revactor_timestamp' : 'rev_timestamp';
+		$actorField = isset( $actorWhere['tables']['temp_rev_user'] ) ? 'revactor_actor' : 'rev_actor';
+
+		$lastModifiedQuery = $this->DB->buildSelectSubquery(
+			[ 'revision' ] + $actorWhere['tables'],
+			$actorField,
+			[ 'rev_page = page_id' ],
+			__METHOD__,
+			[ 'ORDER BY' => "$tsField DESC", 'LIMIT' => 1 ],
+			$actorWhere['joins']
+		);
+
+		if ( $user ) {
+			$actorId = $this->actorNormalization->findActorId( $user, $this->DB );
+			$this->addWhere( "$actorId = $lastModifiedQuery" );
+		}
 	}
 
 	/**
@@ -1213,7 +1277,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _lastrevisionbefore( $option ) {
 		$this->addTable( 'revision', 'rev' );
@@ -1238,7 +1302,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _linksfrom( $option ) {
 		if ( $this->parameters->getParameter( 'distinct' ) == 'strict' ) {
@@ -1282,7 +1346,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _linksto( $option ) {
 		if ( $this->parameters->getParameter( 'distinct' ) == 'strict' ) {
@@ -1342,7 +1406,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _notlinksfrom( $option ) {
 		if ( $this->parameters->getParameter( 'distinct' ) == 'strict' ) {
@@ -1374,7 +1438,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _notlinksto( $option ) {
 		if ( $this->parameters->getParameter( 'distinct' ) == 'strict' ) {
@@ -1409,7 +1473,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _linkstoexternal( $option ) {
 		if ( $this->parameters->getParameter( 'distinct' ) == 'strict' ) {
@@ -1445,7 +1509,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _maxrevisions( $option ) {
 		$this->addWhere( "((SELECT count(rev_aux3.rev_page) FROM {$this->tableNames['revision']} AS rev_aux3 WHERE rev_aux3.rev_page = {$this->tableNames['page']}.page_id) <= {$option})" );
@@ -1456,7 +1520,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _minoredits( $option ) {
 		if ( isset( $option ) && $option == 'exclude' ) {
@@ -1470,7 +1534,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _minrevisions( $option ) {
 		$this->addWhere( "((SELECT count(rev_aux2.rev_page) FROM {$this->tableNames['revision']} AS rev_aux2 WHERE rev_aux2.rev_page = {$this->tableNames['page']}.page_id) >= {$option})" );
@@ -1481,11 +1545,24 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _modifiedby( $option ) {
 		$this->addTable( 'revision', 'change_rev' );
-		$this->addWhere( $this->DB->addQuotes( $option ) . ' = change_rev.rev_user_text AND change_rev.rev_page = page_id' );
+		$this->addJoin( 'change_rev', [ 'JOIN', 'change_rev.rev_page = page_id' ] );
+
+		$user = $this->userIdentityLookup->getUserIdentityByName( $option );
+
+		if ( $user ) {
+			$actorField = $this->addRevisionActorTable( 'change_rev' );
+
+			$this->addWhere( [
+				$actorField => $this->actorNormalization->findActorId( $user, $this->DB ),
+			] );
+		} else {
+			// unresolvable actor
+			$this->addWhere( '1=0' );
+		}
 	}
 
 	/**
@@ -1493,7 +1570,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _namespace( $option ) {
 		if ( is_array( $option ) && count( $option ) ) {
@@ -1518,11 +1595,19 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _notcreatedby( $option ) {
 		$this->addTable( 'revision', 'no_creation_rev' );
-		$this->addWhere( $this->DB->addQuotes( $option ) . ' != no_creation_rev.rev_user_text AND no_creation_rev.rev_page = page_id AND no_creation_rev.rev_parent_id = 0' );
+		$this->addJoin( 'no_creation_rev', [ 'JOIN', 'no_creation_rev.rev_page = page_id' ] );
+
+		$user = $this->userIdentityLookup->getUserIdentityByName( $option );
+		$actorField = $this->addRevisionActorTable( 'no_creation_rev' );
+
+		$this->addWhere( [
+			"$actorField != " . ( $user ? $this->actorNormalization->findActorId( $user, $this->DB ) : 0 ),
+			'no_creation_rev.rev_parent_id = 0'
+		] );
 	}
 
 	/**
@@ -1530,10 +1615,29 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _notlastmodifiedby( $option ) {
-		$this->addWhere( $this->DB->addQuotes( $option ) . ' != (SELECT rev_user_text FROM ' . $this->tableNames['revision'] . ' WHERE ' . $this->tableNames['revision'] . '.rev_page=page_id ORDER BY ' . $this->tableNames['revision'] . '.rev_timestamp DESC LIMIT 1)' );
+		$user = $this->userIdentityLookup->getUserIdentityByName( $option );
+		$actorWhere = $this->actorMigration->getWhere( $this->DB, 'rev_user', $user );
+		// Use the denormalized revactor_timestamp field for sorting
+		// to leverage the index on revactor_actor,revactor_timestamp if applicable
+		$tsField = isset( $actorWhere['tables']['temp_rev_user'] ) ? 'revactor_timestamp' : 'rev_timestamp';
+		$actorField = isset( $actorWhere['tables']['temp_rev_user'] ) ? 'revactor_actor' : 'rev_actor';
+
+		$lastModifiedQuery = $this->DB->buildSelectSubquery(
+			[ 'revision' ] + $actorWhere['tables'],
+			$actorField,
+			[ 'rev_page = page_id' ],
+			__METHOD__,
+			[ 'ORDER BY' => "$tsField DESC", 'LIMIT' => 1 ],
+			$actorWhere['joins']
+		);
+
+		if ( $user ) {
+			$actorId = $this->actorNormalization->findActorId( $user, $this->DB );
+			$this->addWhere( "$actorId != $lastModifiedQuery" );
+		}
 	}
 
 	/**
@@ -1541,10 +1645,25 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _notmodifiedby( $option ) {
-		$this->addWhere( 'NOT EXISTS (SELECT 1 FROM ' . $this->tableNames['revision'] . ' WHERE ' . $this->tableNames['revision'] . '.rev_page=page_id AND ' . $this->tableNames['revision'] . '.rev_user_text = ' . $this->DB->addQuotes( $option ) . ' LIMIT 1)' );
+		$user = $this->userIdentityLookup->getUserIdentityByName( $option );
+		$actorWhere = $this->actorMigration->getWhere( $this->DB, 'rev_user', $user );
+
+		$modifiedByQuery = $this->DB->buildSelectSubquery(
+			[ $this->tableNames['revision' ] ] + $actorWhere['tables'],
+			'1',
+			[
+				"{$this->tableNames['revision']}.rev_page = page_id",
+				$actorWhere['conds']
+			],
+			__METHOD__,
+			[ 'LIMIT' => 1 ],
+			$actorWhere['joins']
+		);
+
+		$this->addWhere( "NOT EXISTS $modifiedByQuery" );
 	}
 
 	/**
@@ -1552,7 +1671,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _notnamespace( $option ) {
 		if ( is_array( $option ) && count( $option ) ) {
@@ -1577,7 +1696,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _count( $option ) {
 		$this->setLimit( $option );
@@ -1588,7 +1707,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _offset( $option ) {
 		$this->setOffset( $option );
@@ -1599,7 +1718,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _order( $option ) {
 		$orderMethod = $this->parameters->getParameter( 'ordermethod' );
@@ -1721,6 +1840,10 @@ class Query {
 				case 'firstedit':
 					$this->addOrderBy( 'rev.rev_timestamp' );
 					$this->addTable( 'revision', 'rev' );
+					$this->addJoin(
+						'rev',
+						[ 'JOIN', "{$this->tableNames['page']}.page_id = rev.rev_page" ]
+					);
 					$this->addSelect(
 						[
 							'rev.rev_timestamp'
@@ -1729,7 +1852,6 @@ class Query {
 					if ( !$this->revisionAuxWhereAdded ) {
 						$this->addWhere(
 							[
-								"{$this->tableNames['page']}.page_id = rev.rev_page",
 								"rev.rev_timestamp = (SELECT MIN(rev_aux.rev_timestamp) FROM {$this->tableNames['revision']} AS rev_aux WHERE rev_aux.rev_page=rev.rev_page)"
 							]
 						);
@@ -1747,11 +1869,14 @@ class Query {
 					} else {
 						$this->addOrderBy( 'rev.rev_timestamp' );
 						$this->addTable( 'revision', 'rev' );
+						$this->addJoin(
+							'rev',
+							[ 'JOIN', "{$this->tableNames['page']}.page_id = rev.rev_page" ]
+						);
 						$this->addSelect( [ 'rev.rev_timestamp' ] );
 						if ( !$this->revisionAuxWhereAdded ) {
 							$this->addWhere(
 								[
-									"{$this->tableNames['page']}.page_id = rev.rev_page",
 									"rev.rev_timestamp = (SELECT MAX(rev_aux.rev_timestamp) FROM {$this->tableNames['revision']} AS rev_aux WHERE rev_aux.rev_page = rev.rev_page)"
 								]
 							);
@@ -1839,7 +1964,7 @@ class Query {
 					}
 					break;
 				case 'user':
-					$this->addOrderBy( 'rev.rev_user_text' );
+					$this->addOrderBy( 'rev_user_text' );
 					$this->addTable( 'revision', 'rev' );
 					$this->_adduser( null, 'rev' );
 					break;
@@ -1854,7 +1979,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _redirects( $option ) {
 		if ( !$this->parameters->getParameter( 'openreferences' ) ) {
@@ -1882,7 +2007,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _stablepages( $option ) {
 		if ( function_exists( 'efLoadFlaggedRevs' ) ) {
@@ -1920,7 +2045,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _qualitypages( $option ) {
 		if ( function_exists( 'efLoadFlaggedRevs' ) ) {
@@ -1950,7 +2075,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _title( $option ) {
 		$ors = [];
@@ -1981,7 +2106,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _nottitle( $option ) {
 		$ors = [];
@@ -2012,7 +2137,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _titlegt( $option ) {
 		$where = '(';
@@ -2038,7 +2163,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _titlelt( $option ) {
 		$where = '(';
@@ -2064,7 +2189,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _usedby( $option ) {
 		if ( $this->parameters->getParameter( 'openreferences' ) ) {
@@ -2097,7 +2222,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _uses( $option ) {
 		$this->addTable( 'templatelinks', 'tl' );
@@ -2123,7 +2248,7 @@ class Query {
 	 *
 	 * @private
 	 * @param	mixed	Parameter Option
-	 * @return	void
+	 * @return void
 	 */
 	private function _notuses( $option ) {
 		if ( count( $option ) > 0 ) {
@@ -2143,5 +2268,60 @@ class Query {
 			$where .= implode( ' OR ', $ors ) . '))';
 		}
 		$this->addWhere( $where );
+	}
+
+	/**
+	 * Get the actor ID field name to be used for a given aliased revision table instance,
+	 * adding appropriate JOIN conditions to the revision_actor_temp table if needed.
+	 *
+	 * @param string $revTableAlias - revision table alias to use, may be empty
+	 * @return string - qualified name of the actor ID field to use
+	 * @throws MWException
+	 */
+	private function addRevisionActorTable( string $revTableAlias ): string {
+		$revIdField = $revTableAlias !== '' ? "$revTableAlias.rev_id" : 'rev_id';
+
+		// Use a JOINed actor ID field from the revision_comment_temp table if mandated by the
+		$readStage = $this->actorMigrationStage & SCHEMA_COMPAT_READ_MASK;
+		if ( $readStage & SCHEMA_COMPAT_READ_TEMP ) {
+			$tmpTable = $revTableAlias !== '' ? "{$revTableAlias}_revision_actor_temp" : 'revision_actor_temp';
+			$actorField = "$tmpTable.revactor_actor";
+
+			$this->addTable( 'revision_actor_temp', $tmpTable );
+			$this->addJoin( $tmpTable, [ 'JOIN', "$tmpTable.revactor_rev = $revIdField" ] );
+		} else {
+			$actorField = $revTableAlias !== '' ? "$revTableAlias.rev_actor" : 'rev_actor';
+		}
+
+		return $actorField;
+	}
+
+	/**
+	 * Add appropriate JOIN conditions on the comment and revision_comment_temp table
+	 * for a given aliased revision table instance.
+	 *
+	 * @param string $revTableAlias - revision table alias to use, may be empty
+	 * @throws MWException
+	 */
+	private function addRevisionCommentTable( string $revTableAlias ): void {
+		$revCommentTable = $revTableAlias !== '' ? "{$revTableAlias}_temp_rev_comment" : 'temp_rev_comment';
+		$commentTable = $revTableAlias !== '' ? "{$revTableAlias}_comment" : 'comment';
+
+		$revIdField = $revTableAlias !== '' ? "$revTableAlias.rev_id" : 'rev_id';
+		$revCommentField = $revTableAlias !== '' ? "$revTableAlias.rev_comment" : 'rev_comment';
+
+		$this->addTable( 'revision_comment_temp', $revCommentTable );
+		$this->addTable( 'comment', $commentTable );
+
+		$this->addJoin(
+			$revCommentTable,
+			[ 'JOIN', "$revCommentTable.revcomment_rev = $revIdField" ]
+		);
+		$this->addJoin(
+			$commentTable,
+			[ 'JOIN', "$revCommentTable.revcomment_comment_id = $commentTable.comment_id" ]
+		);
+
+		$this->addSelect( [ $revCommentField => "$commentTable.comment_text" ] );
 	}
 }

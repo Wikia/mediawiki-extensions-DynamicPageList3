@@ -13,8 +13,10 @@ namespace DPL;
 use DPL\Heading\Heading;
 use DPL\Lister\Lister;
 use MediaWiki\MediaWikiServices;
+use MWException;
 use Parser;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IResultWrapper;
 
 class Parse {
 	/**
@@ -219,14 +221,21 @@ class Parse {
 		/* Query */
 		/*********/
 		try {
-			$this->query = new Query( $this->parameters );
+			$services = MediaWikiServices::getInstance();
+			$this->query = new Query(
+				$this->parameters,
+				$services->getActorMigration(),
+				$services->getUserIdentityLookup(),
+				$services->getActorNormalization(),
+				$services->getMainConfig()->get( 'ActorTableSchemaMigrationStage' )
+			);
 			$result = $this->query->buildAndSelect( $calcRows );
 		} catch ( MWException $e ) {
 			$this->logger->addMessage( \DynamicPageListHooks::FATAL_SQLBUILDERROR, $e->getMessage() );
 			return $this->getFullOutput();
 		}
 
-		$numRows = $this->DB->numRows( $result );
+		$numRows = $result ? $result->numRows() : 0;
 		$articles = $this->processQueryResults( $result );
 
 		global $wgDebugDumpSql;
@@ -246,7 +255,6 @@ class Parse {
 		/*********************/
 		if ( $numRows <= 0 || empty( $articles ) ) {
 			// Shortcut out since there is no processing to do.
-			$this->DB->freeResult( $result );
 			return $this->getFullOutput( 0, false );
 		}
 
@@ -339,7 +347,7 @@ class Parse {
 	 * Process Query Results
 	 *
 	 * @private
-	 * @param	object	Mediawiki Result Object
+	 * @param IResultWrapper $result Mediawiki Result Object
 	 * @return array Array of Article objects.
 	 */
 	private function processQueryResults( $result ) {
@@ -348,7 +356,7 @@ class Parse {
 		/*******************************/
 		$randomCount = $this->parameters->getParameter( 'randomcount' );
 		if ( $randomCount > 0 ) {
-			$nResults = $this->DB->numRows( $result );
+			$nResults = $result->numRows();
 			// mt_srand() seeding was removed due to PHP 5.2.1 and above no longer generating the same sequence for the same seed.
 			//Constrain the total amount of random results to not be greater than the total results.
 			if ( $randomCount > $nResults ) {
@@ -411,7 +419,6 @@ class Parse {
 
 			$articles[] = Article::newFromRow( $row, $this->parameters, $title, $pageNamespace, $pageTitle );
 		}
-		$this->DB->freeResult( $result );
 
 		return $articles;
 	}

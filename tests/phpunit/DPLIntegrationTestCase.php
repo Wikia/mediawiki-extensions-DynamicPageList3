@@ -6,14 +6,14 @@ use DOMXPath;
 use ImportStreamSource;
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\MediaWikiServices;
-use MediaWikiTestCase;
+use MediaWikiIntegrationTestCase;
 use ParserOptions;
 use RequestContext;
 use Title;
 use User;
 use WikiImporter;
 
-abstract class DPLIntegrationTestCase extends MediaWikiTestCase {
+abstract class DPLIntegrationTestCase extends MediaWikiIntegrationTestCase {
 	/**
 	 * Guard condition to ensure we only import seed data once per test suite run.
 	 * @var bool
@@ -119,12 +119,13 @@ abstract class DPLIntegrationTestCase extends MediaWikiTestCase {
 	/**
 	 * Convenience function to return the list of page titles matching a DPL query
 	 * @param array $params - DPL invocation parameters
+	 * @param string $format - DPL output format
 	 * @return string[]
 	 */
-	protected function getDPLQueryResults( array $params ): array {
+	protected function getDPLQueryResults( array $params, string $format = '%PAGE%' ): array {
 		$params += [
 			// Use a custom format for executing the query to allow easily extracting results
-			'format' => '<div id="dpl-test-query">,%PAGE%,|,</div>'
+			'format' => "<div id=\"dpl-test-query\">,$format,|,</div>"
 		];
 
 		$html = $this->runDPLQuery( $params );

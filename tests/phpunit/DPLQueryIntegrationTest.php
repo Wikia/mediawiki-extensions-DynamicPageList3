@@ -179,4 +179,167 @@ class DPLQueryIntegrationTest extends DPLIntegrationTestCase {
 			true
 		);
 	}
+
+	public function testFindPagesNotModifiedByUserInCategory(): void {
+		$this->assertArrayEquals(
+			[ 'DPLTestArticle 2', 'DPLTestArticle 3', 'DPLTestArticleMultipleCategories' ],
+			$this->getDPLQueryResults( [
+				'category' => 'DPLTestCategory',
+				'notmodifiedby' => 'DPLTestUser',
+			] ),
+			true
+		);
+	}
+
+	public function testFindPagesCreatedByUserInCategory(): void {
+		$this->assertArrayEquals(
+			[ 'DPLTestArticleOtherCategoryWithInfobox' ],
+			$this->getDPLQueryResults( [
+				'category' => 'DPLTestOtherCategory',
+				'createdby' => 'FANDOM',
+			] ),
+			true
+		);
+	}
+
+	public function testFindPagesLastModifiedByUserInCategory(): void {
+		$this->assertArrayEquals(
+			[ 'DPLTestArticle 1' ],
+			$this->getDPLQueryResults( [
+				'category' => 'DPLTestCategory',
+				'lastmodifiedby' => 'DPLTestUser',
+			] ),
+			true
+		);
+	}
+
+	public function testFindPagesNotLastModifiedByUserInCategory(): void {
+		$this->assertArrayEquals(
+			[ 'DPLTestArticle 2', 'DPLTestArticle 3', 'DPLTestArticleMultipleCategories' ],
+			$this->getDPLQueryResults( [
+				'category' => 'DPLTestCategory',
+				'notlastmodifiedby' => 'DPLTestUser',
+			] ),
+			true
+		);
+	}
+
+	public function testFindPagesEverModifiedByUserInCategory(): void {
+		$this->assertArrayEquals(
+			[ 'DPLTestArticle 1', 'DPLTestArticle 2', 'DPLTestArticle 3', 'DPLTestArticleMultipleCategories' ],
+			$this->getDPLQueryResults( [
+				'category' => 'DPLTestCategory',
+				'modifiedby' => 'DPLTestAdmin',
+			] ),
+			true
+		);
+	}
+
+	public function testFindPagesNotCreatedByUserInCategory(): void {
+		$this->assertArrayEquals(
+			[ 'DPLTestArticleMultipleCategories' ],
+			$this->getDPLQueryResults( [
+				'category' => 'DPLTestOtherCategory',
+				'notcreatedby' => 'FANDOM',
+			] ),
+			true
+		);
+	}
+
+	public function testFindPagesViaUserFilterCombinations(): void {
+		$this->assertArrayEquals(
+			[ 'DPLUncategorizedPage' ],
+			$this->getDPLQueryResults( [
+				'modifiedby' => 'DPLTestUser',
+				'notcreatedby' => 'DPLTestAdmin',
+				'notlastmodifiedby' => 'DPLTestUser',
+			] ),
+			true
+		);
+	}
+
+	public function testFindPagesInCategoryOrderedByLastEdit(): void {
+		$results = $this->getDPLQueryResults( [
+			'category' => 'DPLTestCategory',
+			'ordermethod' => 'lastedit',
+			'order' => 'descending',
+		] );
+
+		$this->assertArrayEquals(
+			[
+				'DPLTestArticle 3',
+				'DPLTestArticle 2',
+				'DPLTestArticleMultipleCategories',
+				'DPLTestArticle 1',
+			],
+			$results,
+			true
+		);
+	}
+
+	public function testFindPagesInCategoryOrderedByFirstEdit(): void {
+		$results = $this->getDPLQueryResults( [
+			'category' => 'DPLTestCategory',
+			'ordermethod' => 'firstedit',
+			'order' => 'descending',
+		] );
+
+		$this->assertArrayEquals(
+			[
+				'DPLTestArticle 2',
+				'DPLTestArticleMultipleCategories',
+				'DPLTestArticle 1',
+				'DPLTestArticle 3',
+			],
+			$results,
+			true
+		);
+	}
+
+	public function testOrderByLastEditAndUser(): void {
+		$results = $this->getDPLQueryResults( [
+			'category' => 'DPLTestCategory',
+			'ordermethod' => 'lastedit,user',
+			'order' => 'descending',
+			'adduser' => 'true',
+			'createdby' => 'DPLTestAdmin'
+		], '%PAGE% %USER%' );
+
+		$this->assertEquals( [
+			'DPLTestArticle 3 DPLTestAdmin',
+			'DPLTestArticle 2 DPLTestAdmin',
+			'DPLTestArticleMultipleCategories DPLTestAdmin',
+			'DPLTestArticle 1 DPLTestUser',
+		], $results );
+	}
+
+	public function testGetPageAuthors(): void {
+		$results = $this->getDPLQueryResults( [
+			'category' => 'DPLTestCategory',
+			'addauthor' => 'true',
+			'order' => 'ascending',
+			'ordermethod' => 'title'
+		], '%PAGE% %USER%' );
+
+		$this->assertEquals( [
+			'DPLTestArticle 1 DPLTestAdmin',
+			'DPLTestArticle 2 DPLTestAdmin',
+			'DPLTestArticle 3 DPLTestAdmin',
+			'DPLTestArticleMultipleCategories DPLTestAdmin',
+		], $results );
+	}
+
+	public function testGetLastEditorsByPage(): void {
+		$results = $this->getDPLQueryResults( [
+			'category' => 'DPLTestCategory',
+			'addlasteditor' => 'true'
+		], '%PAGE% %USER%' );
+
+		$this->assertEquals( [
+			'DPLTestArticle 1 DPLTestUser',
+			'DPLTestArticle 2 DPLTestAdmin',
+			'DPLTestArticle 3 DPLTestAdmin',
+			'DPLTestArticleMultipleCategories DPLTestAdmin',
+		], $results );
+	}
 }

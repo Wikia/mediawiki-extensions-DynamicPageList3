@@ -10,14 +10,9 @@ jobs:
     strategy:
       matrix:
         include:
-          # Fandom's MW version
-          - mw: 'REL1_33'
-            php: 7.3
-            composer: v1
-            mysql: '5.7'
           # Latest stable MW
-          - mw: 'REL1_36'
-            php: 8.0
+          - mw: 'REL1_37'
+            php: 7.4
             composer: v2
             mysql: '8.0'
           # Latest MW master
@@ -46,10 +41,12 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           extensions: intl
+          # Disable XDebug for a performance boost as we do not currently generate coverage reports
+          coverage: none
           tools: composer:${{ matrix.composer }}
       - name: Cache MediaWiki
         id: cache-mediawiki
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: |
             mediawiki
@@ -64,7 +61,7 @@ jobs:
           key: composer-php${{ matrix.php }}
 
       - name: Fetch MW install script
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           path: installer
 
@@ -82,15 +79,12 @@ jobs:
           MYSQL_PASSWORD: mw12345
 
       - name: Checkout DPL extension
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           path: mediawiki/extensions/DynamicPageList3
 
       - name: Run PHPUnit
-        run: |
-          [[ '${{ matrix.mw }}' != 'master' ]] && PHPUNIT_ARGS='--use-normal-tables' ||  PHPUNIT_ARGS=''
-          php tests/phpunit/phpunit.php $PHPUNIT_ARGS extensions/DynamicPageList3/tests/phpunit
-
+        run: php tests/phpunit/phpunit.php $PHPUNIT_ARGS extensions/DynamicPageList3/tests/phpunit
         env:
           # By default MediaWiki creates temporary tables for use in integration tests,
           # which do not play well with DPL's queries. Ensure we use real tables to avoid issues.
