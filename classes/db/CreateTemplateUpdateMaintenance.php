@@ -10,10 +10,13 @@
 
 namespace DPL\DB;
 
+use CommentStoreComment;
 use ContentHandler;
 use LoggedUpdateMaintenance;
+use MediaWiki\MediaWikiServices;
+use MediaWiki\Revision\SlotRecord;
+use MediaWiki\User\UserRigorOptions;
 use Title;
-use WikiPage;
 
 /*
  * Creates the DPL template when updating.
@@ -30,13 +33,20 @@ class CreateTemplateUpdateMaintenance extends LoggedUpdateMaintenance {
 		$title = Title::newFromText( 'Template:Extension DPL' );
 
 		if ( !$title->exists() ) {
-			$page = WikiPage::factory( $title );
-			$pageContent = ContentHandler::makeContent( "<noinclude>This page was automatically created.  It serves as an anchor page for all '''[[Special:WhatLinksHere/Template:Extension_DPL|invocations]]''' of [http://mediawiki.org/wiki/Extension:DynamicPageList Extension:DynamicPageList (DPL)].</noinclude>", $title );
-			$page->doEditContent(
-				$pageContent,
-				$title,
-				EDIT_NEW | EDIT_FORCE_BOT
+			$services = MediaWikiServices::getInstance();
+			$pageFactory = $services->getWikiPageFactory();
+			$fandomUser = $services->getUserFactory()->newFromName(
+				'FANDOMbot',
+				UserRigorOptions::RIGOR_NONE
 			);
+			$page = $pageFactory->newFromTitle( $title );
+			$pageContent = ContentHandler::makeContent( "<noinclude>This page was automatically created.  It serves as an anchor page for all '''[[Special:WhatLinksHere/Template:Extension_DPL|invocations]]''' of [http://mediawiki.org/wiki/Extension:DynamicPageList Extension:DynamicPageList (DPL)].</noinclude>", $title );
+			$pageUpdater = $page->newPageUpdater( $fandomUser );
+			$pageUpdater->setContent( SlotRecord::MAIN, $pageContent );
+			$comment = CommentStoreComment::newUnsavedComment(
+				'DPL required pages'
+			);
+			$pageUpdater->saveRevision( $comment, EDIT_NEW | EDIT_FORCE_BOT );
 		}
 	}
 

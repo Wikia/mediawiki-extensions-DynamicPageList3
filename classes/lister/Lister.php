@@ -991,23 +991,24 @@ class Lister {
 	 */
 	protected function parseImageUrlWithPath( $article ) {
 		$imageUrl = '';
+		$repoGroup = MediaWikiServices::getInstance()->getRepoGroup();
 		if ( $article instanceof \DPL\Article ) {
 			if ( $article->mNamespace == NS_FILE ) {
 				// calculate URL for existing images
 				// $img = Image::newFromName($article->mTitle->getText());
-				$img = wfFindFile( \Title::makeTitle( NS_FILE, $article->mTitle->getText() ) );
+				$img = $repoGroup->findFile( \Title::makeTitle( NS_FILE, $article->mTitle->getText() ) );
 				if ( $img && $img->exists() ) {
 					$imageUrl = $img->getURL();
 				} else {
 					$fileTitle = \Title::makeTitleSafe( NS_FILE, $article->mTitle->getDBKey() );
-					$imageUrl = \RepoGroup::singleton()->getLocalRepo()->newFile( $fileTitle )->getPath();
+					$imageUrl = $repoGroup->getLocalRepo()->newFile( $fileTitle )->getPath();
 				}
 			}
 		} else {
 			$title = \Title::newfromText( 'File:' . $article );
 			if ( $title !== null ) {
 				$fileTitle   = \Title::makeTitleSafe( 6, $title->getDBKey() );
-				$imageUrl = \RepoGroup::singleton()->getLocalRepo()->newFile( $fileTitle )->getPath();
+				$imageUrl = $repoGroup->getLocalRepo()->newFile( $fileTitle )->getPath();
 			}
 		}
 
@@ -1034,7 +1035,7 @@ class Lister {
 			} else {
 				$pageText = '<br/>';
 			}
-			$text = $this->parser->fetchTemplate( \Title::newFromText( $title ) );
+			$text = $this->parser->fetchTemplateAndTitle( \Title::newFromText( $title ) )[0];
 			if ( ( count( $this->pageTextMatchRegex ) <= 0 || $this->pageTextMatchRegex[0] == '' || !preg_match( $this->pageTextMatchRegex[0], $text ) == false ) && ( count( $this->pageTextMatchNotRegex ) <= 0 || $this->pageTextMatchNotRegex[0] == '' || preg_match( $this->pageTextMatchNotRegex[0], $text ) == false ) ) {
 				if ( $this->includePageMaxLength > 0 && ( strlen( $text ) > $this->includePageMaxLength ) ) {
 					$text = LST::limitTranscludedText( $text, $this->includePageMaxLength, ' [[' . $title . '|..→]]' );

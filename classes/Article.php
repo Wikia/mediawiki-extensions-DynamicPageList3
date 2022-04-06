@@ -12,7 +12,6 @@ namespace DPL;
 
 use MediaWiki\MediaWikiServices;
 use Title;
-use User;
 
 class Article {
 	/**
@@ -210,7 +209,11 @@ class Article {
 	public static function newFromRow( $row, Parameters $parameters, \Title $title, $pageNamespace, $pageTitle ) {
 		global $wgLang;
 
-		$contentLanguage = MediaWikiServices::getInstance()->getContentLanguage();
+		$services = MediaWikiServices::getInstance();
+		$contentLanguage = $services->getContentLanguage();
+		$languageConverter = $services->getLanguageConverterFactory()->getLanguageConverter(
+			$contentLanguage
+		);
 
 		$article = new Article( $title, $pageNamespace );
 
@@ -237,9 +240,9 @@ class Article {
 
 		// get first char used for category-style output
 		if ( isset( $row['sortkey'] ) ) {
-			$article->mStartChar = $contentLanguage->convert( $contentLanguage->firstChar( $row['sortkey'] ) );
+			$article->mStartChar = $languageConverter->convert( $contentLanguage->firstChar( $row['sortkey'] ) );
 		} else {
-			$article->mStartChar = $contentLanguage->convert( $contentLanguage->firstChar( $pageTitle ) );
+			$article->mStartChar = $languageConverter->convert( $contentLanguage->firstChar( $pageTitle ) );
 		}
 
 		$article->mID = intval( $row['page_id'] );
@@ -310,13 +313,7 @@ class Article {
 			// CONTRIBUTION, CONTRIBUTOR
 			if ( $parameters->getParameter( 'addcontribution' ) ) {
 				$article->mContribution = $row['contribution'];
-				// This is the wrong check since the ActorMigration may be in progress
-				// https://www.mediawiki.org/wiki/Actor_migration
-				if ( class_exists( 'ActorMigration' ) ) {
-					$article->mContributor = User::newFromActorId( $row['contributor'] )->getName();
-				} else {
-					$article->mContributor = $row['contributor'];
-				}
+				$article->mContributor = $row['contributor'];
 				$article->mContrib = substr( '*****************', 0, (int)round( log( $row['contribution'] ) ) );
 			}
 

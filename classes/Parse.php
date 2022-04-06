@@ -13,8 +13,12 @@ namespace DPL;
 use DPL\Heading\Heading;
 use DPL\Lister\Lister;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Page\PageIdentity;
+use MWException;
 use Parser;
+use Title;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IResultWrapper;
 
 class Parse {
 	/**
@@ -134,16 +138,21 @@ class Parse {
 		// Reset headings when being ran more than once in the same page load.
 		Article::resetHeadings();
 
+		$page = $this->parser->getPage();
 		// Check that we are not in an infinite transclusion loop
-		if ( isset( $this->parser->mTemplatePath[$this->parser->mTitle->getPrefixedText()] ) ) {
-			$this->logger->addMessage( \DynamicPageListHooks::WARN_TRANSCLUSIONLOOP, $this->parser->mTitle->getPrefixedText() );
+		if ( isset( $this->parser->mTemplatePath[$page->getPrefixedText()] ) ) {
+			$this->logger->addMessage( \DynamicPageListHooks::WARN_TRANSCLUSIONLOOP, $page->getPrefixedText() );
 			return $this->getFullOutput();
 		}
 
 		// Check if DPL shall only be executed from protected pages.
-		if ( Config::getSetting( 'runFromProtectedPagesOnly' ) === true && !$this->parser->mTitle->isProtected( 'edit' ) ) {
+		$restrictionStore = MediaWikiServices::getInstance()->getRestrictionStore();
+		if ( Config::getSetting( 'runFromProtectedPagesOnly' ) === true &&
+			 $page instanceof PageIdentity &&
+			 !$restrictionStore->isProtected( $page, 'edit' )
+		) {
 			// Ideally we would like to allow using a DPL query if the query istelf is coded on a template page which is protected. Then there would be no need for the article to be protected.  However, how can one find out from which wiki source an extension has been invoked???
-			$this->logger->addMessage( \DynamicPageListHooks::FATAL_NOTPROTECTED, $this->parser->mTitle->getPrefixedText() );
+			$this->logger->addMessage( \DynamicPageListHooks::FATAL_NOTPROTECTED, $page->getPrefixedText() );
 			return $this->getFullOutput();
 		}
 
@@ -219,14 +228,21 @@ class Parse {
 		/* Query */
 		/*********/
 		try {
-			$this->query = new Query( $this->parameters );
+			$services = MediaWikiServices::getInstance();
+			$this->query = new Query(
+				$this->parameters,
+				$services->getActorMigration(),
+				$services->getUserIdentityLookup(),
+				$services->getActorNormalization(),
+				$services->getMainConfig()->get( 'ActorTableSchemaMigrationStage' )
+			);
 			$result = $this->query->buildAndSelect( $calcRows );
 		} catch ( MWException $e ) {
 			$this->logger->addMessage( \DynamicPageListHooks::FATAL_SQLBUILDERROR, $e->getMessage() );
 			return $this->getFullOutput();
 		}
 
-		$numRows = $this->DB->numRows( $result );
+		$numRows = $result ? $result->numRows() : 0;
 		$articles = $this->processQueryResults( $result );
 
 		global $wgDebugDumpSql;
@@ -246,7 +262,6 @@ class Parse {
 		/*********************/
 		if ( $numRows <= 0 || empty( $articles ) ) {
 			// Shortcut out since there is no processing to do.
-			$this->DB->freeResult( $result );
 			return $this->getFullOutput( 0, false );
 		}
 
@@ -325,7 +340,7 @@ class Parse {
 		if ( $this->parameters->getParameter( 'allowcachedresults' ) || Config::getSetting( 'alwaysCacheResults' ) ) {
 			$this->parser->getOutput()->updateCacheExpiry( $this->parameters->getParameter( 'cacheperiod' ) ? $this->parameters->getParameter( 'cacheperiod' ) : 3600 );
 		} else {
-			$this->parser->disableCache();
+			$this->parser->getOutput()->updateCacheExpiry( 0 );
 		}
 
 		$finalOutput = $this->getFullOutput( $foundRows, false );
@@ -339,7 +354,7 @@ class Parse {
 	 * Process Query Results
 	 *
 	 * @private
-	 * @param	object	Mediawiki Result Object
+	 * @param IResultWrapper $result Mediawiki Result Object
 	 * @return array Array of Article objects.
 	 */
 	private function processQueryResults( $result ) {
@@ -348,7 +363,7 @@ class Parse {
 		/*******************************/
 		$randomCount = $this->parameters->getParameter( 'randomcount' );
 		if ( $randomCount > 0 ) {
-			$nResults = $this->DB->numRows( $result );
+			$nResults = $result->numRows();
 			// mt_srand() seeding was removed due to PHP 5.2.1 and above no longer generating the same sequence for the same seed.
 			//Constrain the total amount of random results to not be greater than the total results.
 			if ( $randomCount > $nResults ) {
@@ -401,17 +416,19 @@ class Parse {
 				continue;
 			}
 
-			$title     = \Title::makeTitle( $pageNamespace, $pageTitle );
-			$thisTitle = $this->parser->getTitle();
+			$title     = Title::makeTitle( $pageNamespace, $pageTitle );
+			$thisTitle = $this->parser->getPage();
 
 			// Block recursion from happening by seeing if this result row is the page the DPL query was ran from.
-			if ( $this->parameters->getParameter( 'skipthispage' ) && $thisTitle->equals( $title ) ) {
+			if ( $this->parameters->getParameter( 'skipthispage' ) &&
+				 $thisTitle instanceof Title &&
+				 $thisTitle->equals( $title	)
+			) {
 				continue;
 			}
 
 			$articles[] = Article::newFromRow( $row, $this->parameters, $title, $pageNamespace, $pageTitle );
 		}
-		$this->DB->freeResult( $result );
 
 		return $articles;
 	}
@@ -885,7 +902,7 @@ class Parse {
 		global $wgHooks;
 
 		$localParser = MediaWikiServices::getInstance()->getParserFactory()->create();
-		$parserOutput = $localParser->parse( $output, $this->parser->mTitle, $this->parser->mOptions );
+		$parserOutput = $localParser->parse( $output, $this->parser->getPage(), $this->parser->getOptions() );
 
 		if ( !is_array( $reset ) ) {
 			$reset = [];

@@ -250,5 +250,18 @@
 			<text xml:space="preserve">Uncategorized test page</text>
 			<sha1 />
 		</revision>
+		<revision>
+			<id>28</id>
+			<timestamp>2021-09-04T03:01:00Z</timestamp>
+			<contributor>
+				<username>DPLTestUser</username>
+			</contributor>
+			<comment>Page edited</comment>
+			<origin>27</origin>
+			<model>wikitext</model>
+			<format>text/x-wiki</format>
+			<text xml:space="preserve">Uncategorized test page edit</text>
+			<sha1 />
+		</revision>
 	</page>
 </mediawiki>
