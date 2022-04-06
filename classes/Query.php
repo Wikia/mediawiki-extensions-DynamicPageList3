@@ -2279,7 +2279,7 @@ class Query {
 	 * @throws MWException
 	 */
 	private function addRevisionActorTable( string $revTableAlias ): string {
-		$revIdField = $revTableAlias !== '' ? "$revTableAlias.rev_id" : 'rev_id';
+		$revIdField = $revTableAlias !== '' ? "$revTableAlias.rev_id" : 'rev.rev_id';
 
 		// Use a JOINed actor ID field from the revision_comment_temp table if mandated by the
 		$readStage = $this->actorMigrationStage & SCHEMA_COMPAT_READ_MASK;
@@ -2290,7 +2290,7 @@ class Query {
 			$this->addTable( 'revision_actor_temp', $tmpTable );
 			$this->addJoin( $tmpTable, [ 'JOIN', "$tmpTable.revactor_rev = $revIdField" ] );
 		} else {
-			$actorField = $revTableAlias !== '' ? "$revTableAlias.rev_actor" : 'rev_actor';
+			$actorField = $revTableAlias !== '' ? "$revTableAlias.rev_actor" : 'rev.rev_actor';
 		}
 
 		return $actorField;
@@ -2307,8 +2307,8 @@ class Query {
 		$revCommentTable = $revTableAlias !== '' ? "{$revTableAlias}_temp_rev_comment" : 'temp_rev_comment';
 		$commentTable = $revTableAlias !== '' ? "{$revTableAlias}_comment" : 'comment';
 
-		$revIdField = $revTableAlias !== '' ? "$revTableAlias.rev_id" : 'rev_id';
-		$revCommentField = $revTableAlias !== '' ? "$revTableAlias.rev_comment" : 'rev_comment';
+		$revIdField = $revTableAlias !== '' ? "$revTableAlias.rev_id" : "rev.rev_id";
+		$revCommentField = $revTableAlias !== '' ? "$revTableAlias.rev_comment" : "rev.rev_comment";
 
 		$this->addTable( 'revision_comment_temp', $revCommentTable );
 		$this->addTable( 'comment', $commentTable );
