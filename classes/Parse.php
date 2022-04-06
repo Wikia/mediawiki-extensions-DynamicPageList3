@@ -13,8 +13,10 @@ namespace DPL;
 use DPL\Heading\Heading;
 use DPL\Lister\Lister;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Page\PageIdentity;
 use MWException;
 use Parser;
+use Title;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\IResultWrapper;
 
@@ -136,16 +138,21 @@ class Parse {
 		// Reset headings when being ran more than once in the same page load.
 		Article::resetHeadings();
 
+		$page = $this->parser->getPage();
 		// Check that we are not in an infinite transclusion loop
-		if ( isset( $this->parser->mTemplatePath[$this->parser->mTitle->getPrefixedText()] ) ) {
-			$this->logger->addMessage( \DynamicPageListHooks::WARN_TRANSCLUSIONLOOP, $this->parser->mTitle->getPrefixedText() );
+		if ( isset( $this->parser->mTemplatePath[$page->getPrefixedText()] ) ) {
+			$this->logger->addMessage( \DynamicPageListHooks::WARN_TRANSCLUSIONLOOP, $page->getPrefixedText() );
 			return $this->getFullOutput();
 		}
 
 		// Check if DPL shall only be executed from protected pages.
-		if ( Config::getSetting( 'runFromProtectedPagesOnly' ) === true && !$this->parser->mTitle->isProtected( 'edit' ) ) {
+		$restrictionStore = MediaWikiServices::getInstance()->getRestrictionStore();
+		if ( Config::getSetting( 'runFromProtectedPagesOnly' ) === true &&
+			 $page instanceof PageIdentity &&
+			 !$restrictionStore->isProtected( $page, 'edit' )
+		) {
 			// Ideally we would like to allow using a DPL query if the query istelf is coded on a template page which is protected. Then there would be no need for the article to be protected.  However, how can one find out from which wiki source an extension has been invoked???
-			$this->logger->addMessage( \DynamicPageListHooks::FATAL_NOTPROTECTED, $this->parser->mTitle->getPrefixedText() );
+			$this->logger->addMessage( \DynamicPageListHooks::FATAL_NOTPROTECTED, $page->getPrefixedText() );
 			return $this->getFullOutput();
 		}
 
@@ -333,7 +340,7 @@ class Parse {
 		if ( $this->parameters->getParameter( 'allowcachedresults' ) || Config::getSetting( 'alwaysCacheResults' ) ) {
 			$this->parser->getOutput()->updateCacheExpiry( $this->parameters->getParameter( 'cacheperiod' ) ? $this->parameters->getParameter( 'cacheperiod' ) : 3600 );
 		} else {
-			$this->parser->disableCache();
+			$this->parser->getOutput()->updateCacheExpiry( 0 );
 		}
 
 		$finalOutput = $this->getFullOutput( $foundRows, false );
@@ -409,11 +416,14 @@ class Parse {
 				continue;
 			}
 
-			$title     = \Title::makeTitle( $pageNamespace, $pageTitle );
-			$thisTitle = $this->parser->getTitle();
+			$title     = Title::makeTitle( $pageNamespace, $pageTitle );
+			$thisTitle = $this->parser->getPage();
 
 			// Block recursion from happening by seeing if this result row is the page the DPL query was ran from.
-			if ( $this->parameters->getParameter( 'skipthispage' ) && $thisTitle->equals( $title ) ) {
+			if ( $this->parameters->getParameter( 'skipthispage' ) &&
+				 $thisTitle instanceof Title &&
+				 $thisTitle->equals( $title	)
+			) {
 				continue;
 			}
 
@@ -892,7 +902,7 @@ class Parse {
 		global $wgHooks;
 
 		$localParser = MediaWikiServices::getInstance()->getParserFactory()->create();
-		$parserOutput = $localParser->parse( $output, $this->parser->mTitle, $this->parser->mOptions );
+		$parserOutput = $localParser->parse( $output, $this->parser->getPage(), $this->parser->getOptions() );
 
 		if ( !is_array( $reset ) ) {
 			$reset = [];

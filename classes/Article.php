@@ -209,7 +209,11 @@ class Article {
 	public static function newFromRow( $row, Parameters $parameters, \Title $title, $pageNamespace, $pageTitle ) {
 		global $wgLang;
 
-		$contentLanguage = MediaWikiServices::getInstance()->getContentLanguage();
+		$services = MediaWikiServices::getInstance();
+		$contentLanguage = $services->getContentLanguage();
+		$languageConverter = $services->getLanguageConverterFactory()->getLanguageConverter(
+			$contentLanguage
+		);
 
 		$article = new Article( $title, $pageNamespace );
 
@@ -236,9 +240,9 @@ class Article {
 
 		// get first char used for category-style output
 		if ( isset( $row['sortkey'] ) ) {
-			$article->mStartChar = $contentLanguage->convert( $contentLanguage->firstChar( $row['sortkey'] ) );
+			$article->mStartChar = $languageConverter->convert( $contentLanguage->firstChar( $row['sortkey'] ) );
 		} else {
-			$article->mStartChar = $contentLanguage->convert( $contentLanguage->firstChar( $pageTitle ) );
+			$article->mStartChar = $languageConverter->convert( $contentLanguage->firstChar( $pageTitle ) );
 		}
 
 		$article->mID = intval( $row['page_id'] );

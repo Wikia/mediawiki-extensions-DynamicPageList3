@@ -10,6 +10,11 @@
 
 namespace DPL;
 
+use CommentStoreComment;
+use MediaWiki\MediaWikiServices;
+use MediaWiki\Revision\SlotRecord;
+use Title;
+
 class UpdateArticle {
 	/**
 	 * this fucntion hast three tasks (depending on $exec):
@@ -307,13 +312,13 @@ class UpdateArticle {
 			return self::doUpdateArticle( $title, $text, $summary );
 		} elseif ( $exec == 'preview' ) {
 			global $wgScriptPath, $wgRequest;
-			$titleX   = \Title::newFromText( $title );
+			$titleX   = Title::newFromText( $title );
 			$articleX = new \Article( $titleX );
 			$form     = '<html>
 	<form id="editform" name="editform" method="post" action="' . $wgScriptPath . '/index.php?title=' . urlencode( $title ) . '&action=submit" enctype="multipart/form-data">
 		<input type="hidden" value="" name="wpSection" />
 		<input type="hidden" value="' . wfTimestampNow() . '" name="wpStarttime" />
-		<input type="hidden" value="' . $articleX->getTimestamp() . '" name="wpEdittime" />
+		<input type="hidden" value="' . $articleX->getPage()->getTimestamp() . '" name="wpEdittime" />
 		<input type="hidden" value="" name="wpScrolltop" id="wpScrolltop" />
 		<textarea tabindex="1" accesskey="," name="wpTextbox1" id="wpTextbox1" rows="' . $wgUser->getIntOption( 'rows' ) . '" cols="' . $wgUser->getIntOption( 'cols' ) . '" >' . htmlspecialchars( $text ) . '</textarea>
 		<input type="hidden" name="wpSummary value="' . $summary . '" id="wpSummary" />
@@ -335,12 +340,21 @@ class UpdateArticle {
 			return 'session failure';
 		}
 
-		$titleX = \Title::newFromText( $title );
-		$permission_errors = $titleX->getUserPermissionsErrors( 'edit', $wgUser );
+		$services = MediaWikiServices::getInstance();
+		$permissionManager = $services->getPermissionManager();
+		$titleX = Title::newFromText( $title );
+		$permission_errors = $permissionManager->getPermissionErrors( 'edit', $wgUser, $titleX );
 		if ( count( $permission_errors ) == 0 ) {
-			$articleX = \WikiPage::factory( $titleX );
+			$pageFactory = $services->getWikiPageFactory();
+			$articleX = $pageFactory->newFromTitle( $titleX );
 			$articleXContent = \ContentHandler::makeContent( $text, $titleX );
-			$articleX->doEditContent( $articleXContent, $summary, EDIT_UPDATE | EDIT_DEFER_UPDATES | EDIT_AUTOSUMMARY );
+			$page = $pageFactory->newFromTitle( $title );
+			$pageUpdater = $page->newPageUpdater( $wgUser );
+			$comment = CommentStoreComment::newUnsavedComment(
+				$summary
+			);
+			$pageUpdater->setContent( SlotRecord::MAIN, $articleXContent );
+			$pageUpdater->saveRevision( $comment, EDIT_UPDATE | EDIT_DEFER_UPDATES | EDIT_AUTOSUMMARY );
 			$wgOut->redirect( $titleX->getFullUrl( $articleX->isRedirect() ? 'redirect=no' : '' ) );
 			return '';
 		} else {
@@ -560,7 +574,7 @@ class UpdateArticle {
 		return substr( $text, 0, $beginSubst ) . $substitution . substr( $text, $endSubst );
 	}
 
-	public function deleteArticleByRule( $title, $text, $rulesText ) {
+	public static function deleteArticleByRule( $title, $text, $rulesText ) {
 		global $wgUser, $wgOut;
 
 		// return "deletion of articles by DPL is disabled.";
@@ -600,10 +614,11 @@ class UpdateArticle {
 		}
 		$reason .= "\nbulk delete by DPL query";
 
-		$titleX = \Title::newFromText( $title );
+		$titleX = Title::newFromText( $title );
 		if ( $exec ) {
 			# Check permissions
-			$permission_errors = $titleX->getUserPermissionsErrors( 'delete', $wgUser );
+			$permissionManager = MediaWikiServices::getInstance()->getPermissionManager();
+			$permission_errors = $permissionManager->getPermissionErrors( 'delete', $wgUser, $titleX );
 			if ( count( $permission_errors ) > 0 ) {
 				$wgOut->showPermissionsErrorPage( $permission_errors );
 				return 'permission error';
