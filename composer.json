@@ -3,7 +3,7 @@
 		"php-parallel-lint/php-parallel-lint": "v1.3.1",
 		"php-parallel-lint/php-console-highlighter": "v0.5",
 		"mediawiki/minus-x": "1.1.1",
-		"mediawiki/mediawiki-codesniffer": "v37.0.0"
+		"mediawiki/mediawiki-codesniffer": "v39.0.0"
 	},
 	"scripts": {
 		"lint": [
