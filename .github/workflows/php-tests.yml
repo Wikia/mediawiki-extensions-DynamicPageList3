@@ -64,7 +64,7 @@ jobs:
           key: composer-php${{ matrix.php }}
 
       - name: Fetch MW install script
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3.1.0
         with:
           path: installer
 
@@ -82,7 +82,7 @@ jobs:
           MYSQL_PASSWORD: mw12345
 
       - name: Checkout DPL extension
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3.1.0
         with:
           path: mediawiki/extensions/DynamicPageList3
 
